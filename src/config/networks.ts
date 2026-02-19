@@ -2,6 +2,7 @@ export type NetworkConfig = {
   name: string;
   chainId: number;
   rpcUrl: string;
+  wsUrl?: string;
   usdcAddress: string;
   estimatedBlockTimeMs: number;
   blockExplorerUrl?: string;
@@ -13,6 +14,7 @@ const networks: Record<string, NetworkConfig> = {
     name: "Ethereum Mainnet",
     chainId: 1,
     rpcUrl: "https://eth.llamarpc.com",
+    wsUrl: "wss://ethereum-rpc.publicnode.com",
     usdcAddress: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
     estimatedBlockTimeMs: 12_000,
     blockExplorerUrl: "https://etherscan.io",
@@ -22,6 +24,7 @@ const networks: Record<string, NetworkConfig> = {
     name: "Ethereum Sepolia",
     chainId: 11155111,
     rpcUrl: "https://ethereum-sepolia-rpc.publicnode.com",
+    wsUrl: "wss://ethereum-sepolia-rpc.publicnode.com",
     usdcAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
     estimatedBlockTimeMs: 12_000,
     blockExplorerUrl: "https://sepolia.etherscan.io",
@@ -78,10 +81,11 @@ export function getNetworkNames(): string[] {
 
 export function applyOverrides(
   config: NetworkConfig,
-  overrides: { rpc?: string; usdcAddress?: string; chainId?: number }
+  overrides: { rpc?: string; ws?: string; usdcAddress?: string; chainId?: number }
 ): NetworkConfig {
   const result = { ...config };
   if (overrides.rpc) result.rpcUrl = overrides.rpc;
+  if (overrides.ws) result.wsUrl = overrides.ws;
   if (overrides.usdcAddress) result.usdcAddress = overrides.usdcAddress;
   if (overrides.chainId) result.chainId = overrides.chainId;
 

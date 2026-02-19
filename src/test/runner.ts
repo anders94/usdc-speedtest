@@ -1,6 +1,10 @@
 import { type JsonRpcProvider, formatEther } from "ethers";
 import ora from "ora";
 import { runTester, type TesterResult } from "./tester.js";
+import {
+  createReceiptStrategy,
+  WsBlockReceiptStrategy,
+} from "./receipt.js";
 import { computeStats, printSummary } from "./stats.js";
 import { getUsdcContract, USDC_CENT, formatUsdc } from "../utils/usdc.js";
 import { pMap } from "../utils/concurrency.js";
@@ -70,6 +74,16 @@ export async function runTest(
   }
   preflight.succeed("Pre-flight check passed — all wallets ready");
 
+  // Set up receipt waiting strategy (WebSocket or polling)
+  const receiptStrategy = await createReceiptStrategy(
+    network.wsUrl,
+    network.chainId
+  );
+  const mode =
+    receiptStrategy instanceof WsBlockReceiptStrategy
+      ? "WebSocket"
+      : "polling";
+
   const stopSignal = { stopped: false };
   const durationMs = durationSec * 1000;
   let testEndTime = 0;
@@ -90,7 +104,7 @@ export async function runTest(
   }, durationMs);
 
   const spinner = ora(
-    `Running test... (${durationSec}s, Ctrl+C to stop early)`
+    `Running test (${mode})... (${durationSec}s, Ctrl+C to stop early)`
   ).start();
 
   const startTime = Date.now();
@@ -106,7 +120,7 @@ export async function runTest(
         Math.floor((Date.now() - startTime) / 1000),
         durationSec
       );
-      spinner.text = `Running test... ${elapsed}s / ${durationSec}s (Ctrl+C to stop early)`;
+      spinner.text = `Running test (${mode})... ${elapsed}s / ${durationSec}s (Ctrl+C to stop early)`;
     }
   }, 1000);
 
@@ -118,7 +132,8 @@ export async function runTest(
         provider,
         network.usdcAddress,
         network.estimatedBlockTimeMs,
-        stopSignal
+        stopSignal,
+        receiptStrategy
       );
       doneCount.value++;
       return result;
@@ -128,6 +143,11 @@ export async function runTest(
   clearTimeout(timer);
   clearInterval(progressInterval);
   process.removeListener("SIGINT", sigintHandler);
+
+  // Tear down WebSocket connection if active
+  if (receiptStrategy instanceof WsBlockReceiptStrategy) {
+    await receiptStrategy.destroy();
+  }
 
   // Use the time the stop signal fired (not when cleanup finished) for accurate throughput
   const actualDurationMs = testEndTime - startTime;

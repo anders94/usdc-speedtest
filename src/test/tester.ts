@@ -1,12 +1,7 @@
-import {
-  Contract,
-  Wallet,
-  type JsonRpcProvider,
-  type TransactionReceipt,
-  type TransactionResponse,
-} from "ethers";
+import { Contract, Wallet, type JsonRpcProvider } from "ethers";
 import { ERC20_ABI, USDC_CENT } from "../utils/usdc.js";
 import type { WalletPair } from "../wallet/derive.js";
+import type { ReceiptStrategy } from "./receipt.js";
 
 // Fixed gas limit for USDC transfers — skips eth_estimateGas which can fail
 // on L2s when RPC state hasn't caught up with the just-confirmed prior tx.
@@ -16,10 +11,6 @@ const TRANSFER_GAS_LIMIT = 100_000n;
 // Retry config for transient RPC errors (rate limits, connection drops)
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 500;
-
-// Receipt polling config
-const MIN_POLL_INTERVAL_MS = 50;
-const MAX_POLL_INTERVAL_MS = 1000;
 
 export type TxRecord = {
   txHash: string;
@@ -59,47 +50,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Adaptive receipt polling. Instead of ethers' fixed 4s interval:
- * 1. Wait ~80% of expected confirmation time before first poll
- * 2. Then poll at tight intervals (1/4 of expected time, clamped)
- *
- * Returns the receipt and the time (ms) from tx broadcast to receipt,
- * so the caller can update its expectation.
- */
-async function waitForReceipt(
-  provider: JsonRpcProvider,
-  tx: TransactionResponse,
-  expectedMs: number
-): Promise<TransactionReceipt> {
-  // Wait most of the expected time before first poll
-  const initialDelay = Math.max(expectedMs * 0.8, MIN_POLL_INTERVAL_MS);
-  await sleep(initialDelay);
-
-  // Then poll at ~1/4 the expected time, clamped to reasonable bounds
-  const pollInterval = Math.max(
-    Math.min(expectedMs / 4, MAX_POLL_INTERVAL_MS),
-    MIN_POLL_INTERVAL_MS
-  );
-
-  while (true) {
-    const receipt = await provider.getTransactionReceipt(tx.hash);
-    if (receipt) {
-      if (receipt.status === 0) {
-        throw new Error("transaction reverted on-chain");
-      }
-      return receipt;
-    }
-    await sleep(pollInterval);
-  }
-}
-
 export async function runTester(
   pair: WalletPair,
   provider: JsonRpcProvider,
   usdcAddress: string,
   estimatedBlockTimeMs: number,
-  stopSignal: { stopped: boolean }
+  stopSignal: { stopped: boolean },
+  receiptStrategy: ReceiptStrategy
 ): Promise<TesterResult> {
   const walletA = new Wallet(pair.sender.privateKey, provider);
   const walletB = new Wallet(pair.receiver.privateKey, provider);
@@ -165,7 +122,7 @@ export async function runTester(
           ...feeOverrides,
         });
         const broadcastTime = Date.now();
-        const receipt = await waitForReceipt(provider, tx, expectedConfirmMs);
+        const receipt = await receiptStrategy.waitForReceipt(provider, tx, expectedConfirmMs);
         const latencyMs = Date.now() - startTime;
 
         // Update expected confirmation time (exponential moving average)
@@ -223,7 +180,7 @@ export async function runTester(
           nonce: nonceB,
           ...feeOverrides,
         });
-        await waitForReceipt(provider, tx, expectedConfirmMs);
+        await receiptStrategy.waitForReceipt(provider, tx, expectedConfirmMs);
         break;
       } catch (err: any) {
         if (isTransientError(err) && attempt < MAX_RETRIES) {

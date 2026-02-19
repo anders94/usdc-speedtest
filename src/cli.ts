@@ -33,6 +33,7 @@ program
   .option("--rpc <url>", "override RPC endpoint")
   .option("--usdc-address <addr>", "override USDC contract address")
   .option("--chain-id <id>", "override chain ID")
+  .option("--ws <url>", "WebSocket RPC URL for block subscriptions")
   .option("--cleanup", "sweep funds from derived wallets back to master")
   .option("--skip-funding", "skip the wallet funding step");
 
@@ -45,6 +46,7 @@ async function main() {
   let network = getNetwork(opts.network);
   network = applyOverrides(network, {
     rpc: opts.rpc,
+    ws: opts.ws,
     usdcAddress: opts.usdcAddress,
     chainId: opts.chainId ? parseInt(opts.chainId) : undefined,
   });
@@ -72,6 +74,9 @@ async function main() {
   log.header("USDC Speedtest");
   log.info(`Network:    ${network.name} (chainId: ${network.chainId})`);
   log.info(`RPC:        ${network.rpcUrl}`);
+  if (network.wsUrl) {
+    log.info(`WebSocket:  ${network.wsUrl}`);
+  }
   log.info(`Parallel:   ${parallelCount} testers (${walletCount} wallets)`);
   log.info(`Duration:   ${durationSec}s`);
   console.log();
