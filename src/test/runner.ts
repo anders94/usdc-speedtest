@@ -1,4 +1,4 @@
-import { JsonRpcProvider, formatEther } from "ethers";
+import { type JsonRpcProvider, formatEther } from "ethers";
 import ora from "ora";
 import { runTester, type TesterResult } from "./tester.js";
 import {
@@ -129,22 +129,17 @@ export async function runTest(
   }, 1000);
 
   // Spawn all testers in parallel
-  // When immediateReceipt is true, each tester gets its own JsonRpcProvider
-  // so they have independent HTTP connections — avoids socket pool bottleneck
-  // when eth_sendRawTransaction blocks until finality.
   const results: TesterResult[] = await Promise.all(
     pairs.map(async (pair) => {
-      const testerProvider = network.immediateReceipt
-        ? new JsonRpcProvider(network.rpcUrl, network.chainId, { staticNetwork: true })
-        : provider;
       const result = await runTester(
         pair,
-        testerProvider,
+        provider,
         network.usdcAddress,
         network.estimatedBlockTimeMs,
         stopSignal,
         receiptStrategy,
-        network.immediateReceipt
+        network.immediateReceipt,
+        network.rpcUrl
       );
       doneCount.value++;
       return result;
