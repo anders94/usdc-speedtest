@@ -117,6 +117,7 @@ export async function runTest(
         pair,
         provider,
         network.usdcAddress,
+        network.estimatedBlockTimeMs,
         stopSignal
       );
       doneCount.value++;
