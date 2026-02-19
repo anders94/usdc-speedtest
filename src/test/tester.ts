@@ -1,5 +1,5 @@
-import { Wallet, type JsonRpcProvider } from "ethers";
-import { getUsdcContract, USDC_CENT } from "../utils/usdc.js";
+import { Contract, Wallet, type JsonRpcProvider } from "ethers";
+import { ERC20_ABI, USDC_CENT } from "../utils/usdc.js";
 import type { WalletPair } from "../wallet/derive.js";
 
 // Fixed gas limit for USDC transfers — skips eth_estimateGas which can fail
@@ -58,12 +58,34 @@ export async function runTester(
   const walletA = new Wallet(pair.sender.privateKey, provider);
   const walletB = new Wallet(pair.receiver.privateKey, provider);
 
-  const usdcA = getUsdcContract(usdcAddress, walletA);
-  const usdcB = getUsdcContract(usdcAddress, walletB);
+  // Pre-encode calldata for both directions — avoids ABI encoding per tx
+  const iface = new Contract(usdcAddress, ERC20_ABI).interface;
+  const dataAtoB = iface.encodeFunctionData("transfer", [
+    walletB.address,
+    USDC_CENT,
+  ]);
+  const dataBtoA = iface.encodeFunctionData("transfer", [
+    walletA.address,
+    USDC_CENT,
+  ]);
 
-  // Fetch nonces once upfront — track locally to avoid stale RPC reads
-  let nonceA = await provider.getTransactionCount(walletA.address, "pending");
-  let nonceB = await provider.getTransactionCount(walletB.address, "pending");
+  // Fetch nonces and fee data once — track locally to avoid per-tx RPC calls
+  const [initNonceA, initNonceB, feeData] = await Promise.all([
+    provider.getTransactionCount(walletA.address, "pending"),
+    provider.getTransactionCount(walletB.address, "pending"),
+    provider.getFeeData(),
+  ]);
+
+  let nonceA = initNonceA;
+  let nonceB = initNonceB;
+
+  // Build fee overrides once (works for both EIP-1559 and legacy chains)
+  const feeOverrides = feeData.maxFeePerGas
+    ? {
+        maxFeePerGas: feeData.maxFeePerGas,
+        maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
+      }
+    : { gasPrice: feeData.gasPrice };
 
   const transactions: TxRecord[] = [];
   // usdcOnA tracks whether the USDC is currently held by wallet A (the even/sender wallet).
@@ -73,8 +95,8 @@ export async function runTester(
   let erroredOut = false;
 
   while (!stopSignal.stopped) {
-    const sender = usdcOnA ? usdcA : usdcB;
-    const receiverAddr = usdcOnA ? walletB.address : walletA.address;
+    const wallet = usdcOnA ? walletA : walletB;
+    const data = usdcOnA ? dataAtoB : dataBtoA;
     const direction: TxRecord["direction"] = usdcOnA ? "A→B" : "B→A";
     const nonce = usdcOnA ? nonceA : nonceB;
 
@@ -85,17 +107,21 @@ export async function runTester(
       if (stopSignal.stopped) break;
 
       try {
-        const tx = await (sender.transfer as any)(receiverAddr, USDC_CENT, {
+        // Send raw tx — no extra RPC calls (gas, nonce, fees all pre-set)
+        const tx = await wallet.sendTransaction({
+          to: usdcAddress,
+          data,
           gasLimit: TRANSFER_GAS_LIMIT,
           nonce,
+          ...feeOverrides,
         });
         const receipt = await tx.wait();
         const latencyMs = Date.now() - startTime;
 
         transactions.push({
-          txHash: receipt.hash,
+          txHash: receipt!.hash,
           latencyMs,
-          gasUsed: receipt.gasUsed,
+          gasUsed: receipt!.gasUsed,
           direction,
         });
 
@@ -134,9 +160,12 @@ export async function runTester(
   if (!usdcOnA) {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const tx = await (usdcB.transfer as any)(walletA.address, USDC_CENT, {
+        const tx = await walletB.sendTransaction({
+          to: usdcAddress,
+          data: dataBtoA,
           gasLimit: TRANSFER_GAS_LIMIT,
           nonce: nonceB,
+          ...feeOverrides,
         });
         await tx.wait();
         break;
