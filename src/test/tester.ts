@@ -7,6 +7,10 @@ import type { WalletPair } from "../wallet/derive.js";
 // Typical USDC transfer uses ~40k-65k gas; 100k is generous but safe.
 const TRANSFER_GAS_LIMIT = 100_000n;
 
+// Retry config for transient RPC errors (rate limits, connection drops)
+const MAX_RETRIES = 3;
+const RETRY_BASE_MS = 500;
+
 export type TxRecord = {
   txHash: string;
   latencyMs: number;
@@ -17,7 +21,33 @@ export type TxRecord = {
 export type TesterResult = {
   pairIndex: number;
   transactions: TxRecord[];
+  /** True if the tester ran until the stop signal (timer/Ctrl+C), false if it errored out. */
+  completedCleanly: boolean;
 };
+
+/** Check if an error is transient (RPC issue, not an on-chain revert). */
+function isTransientError(err: any): boolean {
+  const msg = (err.message || err.shortMessage || "").toLowerCase();
+  return (
+    msg.includes("could not coalesce error") ||
+    msg.includes("timeout") ||
+    msg.includes("rate limit") ||
+    msg.includes("429") ||
+    msg.includes("econnreset") ||
+    msg.includes("econnrefused") ||
+    msg.includes("socket hang up") ||
+    msg.includes("network error") ||
+    msg.includes("missing response") ||
+    msg.includes("bad response") ||
+    err.code === "TIMEOUT" ||
+    err.code === "NETWORK_ERROR" ||
+    err.code === "SERVER_ERROR"
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export async function runTester(
   pair: WalletPair,
@@ -36,57 +66,85 @@ export async function runTester(
   // It starts true because funding puts USDC on even wallets.
   let usdcOnA = true;
 
+  let erroredOut = false;
+
   while (!stopSignal.stopped) {
     const sender = usdcOnA ? usdcA : usdcB;
     const receiverAddr = usdcOnA ? walletB.address : walletA.address;
     const direction: TxRecord["direction"] = usdcOnA ? "A→B" : "B→A";
 
     const startTime = Date.now();
+    let succeeded = false;
 
-    try {
-      const tx = await (sender.transfer as any)(receiverAddr, USDC_CENT, {
-        gasLimit: TRANSFER_GAS_LIMIT,
-      });
-      const receipt = await tx.wait();
-      const latencyMs = Date.now() - startTime;
-
-      transactions.push({
-        txHash: receipt.hash,
-        latencyMs,
-        gasUsed: receipt.gasUsed,
-        direction,
-      });
-
-      usdcOnA = !usdcOnA;
-    } catch (err: any) {
-      // If stopped during a tx, just break — the send failed so USDC didn't move
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (stopSignal.stopped) break;
 
-      const shortReason =
-        err.reason || err.shortMessage || err.message?.slice(0, 120);
-      console.error(
-        `  Tester #${pair.index} error (${direction}): ${shortReason}`
-      );
+      try {
+        const tx = await (sender.transfer as any)(receiverAddr, USDC_CENT, {
+          gasLimit: TRANSFER_GAS_LIMIT,
+        });
+        const receipt = await tx.wait();
+        const latencyMs = Date.now() - startTime;
+
+        transactions.push({
+          txHash: receipt.hash,
+          latencyMs,
+          gasUsed: receipt.gasUsed,
+          direction,
+        });
+
+        usdcOnA = !usdcOnA;
+        succeeded = true;
+        break;
+      } catch (err: any) {
+        if (stopSignal.stopped) break;
+
+        if (isTransientError(err) && attempt < MAX_RETRIES) {
+          const delay = RETRY_BASE_MS * 2 ** attempt;
+          await sleep(delay);
+          continue;
+        }
+
+        const shortReason =
+          err.reason || err.shortMessage || err.message?.slice(0, 120);
+        console.error(
+          `  Tester #${pair.index} error (${direction}): ${shortReason}`
+        );
+        break;
+      }
+    }
+
+    if (!succeeded && !stopSignal.stopped) {
+      erroredOut = true;
       break;
     }
+    if (!succeeded) break;
   }
 
   // If USDC ended up on wallet B (the odd wallet), send it back to A
   // so that cleanup always finds USDC on the even wallets.
   if (!usdcOnA) {
-    try {
-      const tx = await (usdcB.transfer as any)(walletA.address, USDC_CENT, {
-        gasLimit: TRANSFER_GAS_LIMIT,
-      });
-      await tx.wait();
-    } catch (err: any) {
-      const shortReason =
-        err.reason || err.shortMessage || err.message?.slice(0, 120);
-      console.error(
-        `  Tester #${pair.index}: failed to return USDC to sender wallet: ${shortReason}`
-      );
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const tx = await (usdcB.transfer as any)(walletA.address, USDC_CENT, {
+          gasLimit: TRANSFER_GAS_LIMIT,
+        });
+        await tx.wait();
+        break;
+      } catch (err: any) {
+        if (isTransientError(err) && attempt < MAX_RETRIES) {
+          await sleep(RETRY_BASE_MS * 2 ** attempt);
+          continue;
+        }
+        const shortReason =
+          err.reason || err.shortMessage || err.message?.slice(0, 120);
+        console.error(
+          `  Tester #${pair.index}: failed to return USDC to sender wallet: ${shortReason}`
+        );
+        break;
+      }
     }
   }
 
-  return { pairIndex: pair.index, transactions };
+  return { pairIndex: pair.index, transactions, completedCleanly: !erroredOut };
 }

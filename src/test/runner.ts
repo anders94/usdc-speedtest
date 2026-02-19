@@ -69,14 +69,13 @@ export async function runTest(
 
   const stopSignal = { stopped: false };
   const durationMs = durationSec * 1000;
+  let testEndTime = 0;
 
   // Set up Ctrl+C handler
   const sigintHandler = () => {
     if (!stopSignal.stopped) {
       stopSignal.stopped = true;
-      console.log(
-        "\n  Ctrl+C received — stopping after current transactions complete..."
-      );
+      testEndTime = Date.now();
     }
   };
   process.on("SIGINT", sigintHandler);
@@ -84,6 +83,7 @@ export async function runTest(
   // Set up timer
   const timer = setTimeout(() => {
     stopSignal.stopped = true;
+    testEndTime = Date.now();
   }, durationMs);
 
   const spinner = ora(
@@ -91,25 +91,42 @@ export async function runTest(
   ).start();
 
   const startTime = Date.now();
+  const doneCount = { value: 0 };
 
   // Progress update interval
   const progressInterval = setInterval(() => {
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
-    spinner.text = `Running test... ${elapsed}s / ${durationSec}s (Ctrl+C to stop early)`;
+    if (stopSignal.stopped) {
+      const remaining = pairs.length - doneCount.value;
+      spinner.text = `Cleaning up... ${remaining} of ${pairs.length} testers still finishing`;
+    } else {
+      const elapsed = Math.min(
+        Math.floor((Date.now() - startTime) / 1000),
+        durationSec
+      );
+      spinner.text = `Running test... ${elapsed}s / ${durationSec}s (Ctrl+C to stop early)`;
+    }
   }, 1000);
 
   // Spawn all testers in parallel
   const results: TesterResult[] = await Promise.all(
-    pairs.map((pair) =>
-      runTester(pair, provider, network.usdcAddress, stopSignal)
-    )
+    pairs.map(async (pair) => {
+      const result = await runTester(
+        pair,
+        provider,
+        network.usdcAddress,
+        stopSignal
+      );
+      doneCount.value++;
+      return result;
+    })
   );
 
   clearTimeout(timer);
   clearInterval(progressInterval);
   process.removeListener("SIGINT", sigintHandler);
 
-  const actualDurationMs = Date.now() - startTime;
+  // Use the time the stop signal fired (not when cleanup finished) for accurate throughput
+  const actualDurationMs = testEndTime - startTime;
   spinner.stop();
 
   // Compute and display stats

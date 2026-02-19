@@ -142,12 +142,13 @@ export async function checkAndFund(
     let usdcNeeded = 0n;
 
     if (ethBalance < minEthPerWallet) {
-      ethNeeded = minEthPerWallet - ethBalance;
+      // Fund the full target amount, not just the delta — avoids dust top-ups
+      ethNeeded = minEthPerWallet;
     }
 
     // Even wallets (senders) need USDC
     if (i % 2 === 0 && usdcBalance < USDC_CENT) {
-      usdcNeeded = USDC_CENT - usdcBalance;
+      usdcNeeded = USDC_CENT;
     }
 
     if (ethNeeded > 0n || usdcNeeded > 0n) {

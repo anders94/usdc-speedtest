@@ -26,10 +26,13 @@ export function computeStats(
   results: TesterResult[],
   durationMs: number
 ): TestSummary {
+  // Only include testers that ran the full duration (not errored out)
+  const cleanResults = results.filter((r) => r.completedCleanly);
+
   const allLatencies: number[] = [];
   let totalGas = 0n;
 
-  for (const r of results) {
+  for (const r of cleanResults) {
     for (const tx of r.transactions) {
       allLatencies.push(tx.latencyMs);
       totalGas += tx.gasUsed;
@@ -67,9 +70,13 @@ export function printSummary(
   const fmt = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
   const fmtMs = (n: number) => `${fmt(n)} ms`;
 
+  const cleanCount = results.filter((r) => r.completedCleanly).length;
+  const errorCount = parallelTesters - cleanCount;
+
   console.log();
   console.log(chalk.white(`  Duration:            ${fmt(stats.totalDurationMs / 1000)}s`));
-  console.log(chalk.white(`  Parallel testers:    ${parallelTesters}`));
+  console.log(chalk.white(`  Parallel testers:    ${cleanCount} of ${parallelTesters}` +
+    (errorCount > 0 ? chalk.yellow(` (${errorCount} errored out)`) : "")));
   console.log(chalk.bold.white(`  Total transactions:  ${stats.totalTransactions}`));
   console.log(chalk.bold.green(`  Throughput:          ${fmt(stats.transactionsPerSecond)} tx/s`));
 
@@ -95,8 +102,9 @@ export function printSummary(
       count > 0
         ? r.transactions.reduce((s, t) => s + t.latencyMs, 0) / count
         : 0;
+    const status = r.completedCleanly ? "" : chalk.yellow(" (errored)");
     console.log(
-      chalk.white(`    Tester #${r.pairIndex}:  ${count} txs,  avg ${fmtMs(avg)}`)
+      chalk.white(`    Tester #${r.pairIndex}:  ${count} txs,  avg ${fmtMs(avg)}`) + status
     );
   }
 
