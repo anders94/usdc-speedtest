@@ -56,7 +56,8 @@ export async function runTester(
   usdcAddress: string,
   estimatedBlockTimeMs: number,
   stopSignal: { stopped: boolean },
-  receiptStrategy: ReceiptStrategy
+  receiptStrategy: ReceiptStrategy,
+  immediateReceipt?: boolean
 ): Promise<TesterResult> {
   const walletA = new Wallet(pair.sender.privateKey, provider);
   const walletB = new Wallet(pair.receiver.privateKey, provider);
@@ -72,11 +73,12 @@ export async function runTester(
     USDC_CENT,
   ]);
 
-  // Fetch nonces and fee data once — track locally to avoid per-tx RPC calls
-  const [initNonceA, initNonceB, feeData] = await Promise.all([
+  // Fetch nonces, fee data, and chain ID once — track locally to avoid per-tx RPC calls
+  const [initNonceA, initNonceB, feeData, providerNetwork] = await Promise.all([
     provider.getTransactionCount(walletA.address, "pending"),
     provider.getTransactionCount(walletB.address, "pending"),
     provider.getFeeData(),
+    provider.getNetwork(),
   ]);
 
   let nonceA = initNonceA;
@@ -113,30 +115,55 @@ export async function runTester(
       if (stopSignal.stopped) break;
 
       try {
-        // Send raw tx — no extra RPC calls (gas, nonce, fees all pre-set)
-        const tx = await wallet.sendTransaction({
-          to: usdcAddress,
-          data,
-          gasLimit: TRANSFER_GAS_LIMIT,
-          nonce,
-          ...feeOverrides,
-        });
-        const broadcastTime = Date.now();
-        const receipt = await receiptStrategy.waitForReceipt(provider, tx, expectedConfirmMs);
-        const latencyMs = Date.now() - startTime;
+        if (immediateReceipt) {
+          // Single RPC round trip — sign locally, send raw, get receipt back
+          const signedTx = await wallet.signTransaction({
+            to: usdcAddress,
+            data,
+            gasLimit: TRANSFER_GAS_LIMIT,
+            nonce,
+            chainId: providerNetwork.chainId,
+            type: feeData.maxFeePerGas ? 2 : 0,
+            ...feeOverrides,
+          });
 
-        // Update expected confirmation time (exponential moving average)
-        const confirmMs = Date.now() - broadcastTime;
-        expectedConfirmMs = Math.round(
-          expectedConfirmMs * 0.7 + confirmMs * 0.3
-        );
+          const raw = await provider.send("eth_sendRawTransaction", [signedTx]);
 
-        transactions.push({
-          txHash: receipt.hash,
-          latencyMs,
-          gasUsed: receipt.gasUsed,
-          direction,
-        });
+          const txHash = typeof raw === "string" ? raw : raw.transactionHash;
+          const gasUsed = raw.gasUsed != null ? BigInt(raw.gasUsed) : TRANSFER_GAS_LIMIT;
+
+          if (raw.status != null && BigInt(raw.status) === 0n) {
+            throw new Error("transaction reverted on-chain");
+          }
+
+          const latencyMs = Date.now() - startTime;
+          transactions.push({ txHash, latencyMs, gasUsed, direction });
+        } else {
+          // Standard path: send + wait for receipt (2 RPC round trips)
+          const tx = await wallet.sendTransaction({
+            to: usdcAddress,
+            data,
+            gasLimit: TRANSFER_GAS_LIMIT,
+            nonce,
+            ...feeOverrides,
+          });
+          const broadcastTime = Date.now();
+          const receipt = await receiptStrategy.waitForReceipt(provider, tx, expectedConfirmMs);
+          const latencyMs = Date.now() - startTime;
+
+          // Update expected confirmation time (exponential moving average)
+          const confirmMs = Date.now() - broadcastTime;
+          expectedConfirmMs = Math.round(
+            expectedConfirmMs * 0.7 + confirmMs * 0.3
+          );
+
+          transactions.push({
+            txHash: receipt.hash,
+            latencyMs,
+            gasUsed: receipt.gasUsed,
+            direction,
+          });
+        }
 
         if (usdcOnA) nonceA++;
         else nonceB++;

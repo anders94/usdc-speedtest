@@ -1,9 +1,10 @@
-import { type JsonRpcProvider, formatEther } from "ethers";
+import { JsonRpcProvider, formatEther } from "ethers";
 import ora from "ora";
 import { runTester, type TesterResult } from "./tester.js";
 import {
   createReceiptStrategy,
   WsBlockReceiptStrategy,
+  ImmediateReceiptStrategy,
 } from "./receipt.js";
 import { computeStats, printSummary } from "./stats.js";
 import { getUsdcContract, USDC_CENT, formatUsdc } from "../utils/usdc.js";
@@ -77,12 +78,15 @@ export async function runTest(
   // Set up receipt waiting strategy (WebSocket or polling)
   const receiptStrategy = await createReceiptStrategy(
     network.wsUrl,
-    network.chainId
+    network.chainId,
+    network.immediateReceipt
   );
   const mode =
-    receiptStrategy instanceof WsBlockReceiptStrategy
-      ? "WebSocket"
-      : "polling";
+    receiptStrategy instanceof ImmediateReceiptStrategy
+      ? "immediate"
+      : receiptStrategy instanceof WsBlockReceiptStrategy
+        ? "WebSocket"
+        : "polling";
 
   const stopSignal = { stopped: false };
   const durationMs = durationSec * 1000;
@@ -125,15 +129,22 @@ export async function runTest(
   }, 1000);
 
   // Spawn all testers in parallel
+  // When immediateReceipt is true, each tester gets its own JsonRpcProvider
+  // so they have independent HTTP connections — avoids socket pool bottleneck
+  // when eth_sendRawTransaction blocks until finality.
   const results: TesterResult[] = await Promise.all(
     pairs.map(async (pair) => {
+      const testerProvider = network.immediateReceipt
+        ? new JsonRpcProvider(network.rpcUrl, network.chainId, { staticNetwork: true })
+        : provider;
       const result = await runTester(
         pair,
-        provider,
+        testerProvider,
         network.usdcAddress,
         network.estimatedBlockTimeMs,
         stopSignal,
-        receiptStrategy
+        receiptStrategy,
+        network.immediateReceipt
       );
       doneCount.value++;
       return result;

@@ -6,6 +6,7 @@ export type NetworkConfig = {
   usdcAddress: string;
   estimatedBlockTimeMs: number;
   blockExplorerUrl?: string;
+  immediateReceipt?: boolean;
   supported: boolean;
 };
 
@@ -54,14 +55,16 @@ const networks: Record<string, NetworkConfig> = {
     rpcUrl: "",
     usdcAddress: "",
     estimatedBlockTimeMs: 500,
+    immediateReceipt: true,
     supported: false,
   },
   radiusTestnet: {
     name: "Radius Testnet",
-    chainId: 0,
-    rpcUrl: "",
+    chainId: 72344,
+    rpcUrl: "https://rpc.testnet.radiustech.xyz",
     usdcAddress: "",
     estimatedBlockTimeMs: 500,
+    immediateReceipt: true,
     supported: false,
   },
 };

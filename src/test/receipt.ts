@@ -126,13 +126,42 @@ export class WsBlockReceiptStrategy implements ReceiptStrategy {
 }
 
 /**
- * Factory: creates a WsBlockReceiptStrategy if wsUrl is provided and connects
- * successfully; otherwise falls back to PollingReceiptStrategy.
+ * Immediate receipt strategy for instant-finality chains (e.g. Radius).
+ * The receipt is available as soon as sendTransaction returns, so we just
+ * call tx.wait() which resolves on the first getTransactionReceipt attempt.
+ */
+export class ImmediateReceiptStrategy implements ReceiptStrategy {
+  async waitForReceipt(
+    _provider: JsonRpcProvider,
+    tx: TransactionResponse,
+    _expectedMs: number
+  ): Promise<TransactionReceipt> {
+    const receipt = await tx.wait();
+    if (!receipt) {
+      throw new Error("No receipt returned from tx.wait()");
+    }
+    if (receipt.status === 0) {
+      throw new Error("transaction reverted on-chain");
+    }
+    return receipt;
+  }
+}
+
+/**
+ * Factory: creates the appropriate receipt strategy.
+ * immediateReceipt → ImmediateReceiptStrategy (instant-finality chains)
+ * wsUrl            → WsBlockReceiptStrategy (WebSocket block subscription)
+ * otherwise        → PollingReceiptStrategy (adaptive polling)
  */
 export async function createReceiptStrategy(
   wsUrl: string | undefined,
-  chainId: number
+  chainId: number,
+  immediateReceipt?: boolean
 ): Promise<ReceiptStrategy> {
+  if (immediateReceipt) {
+    return new ImmediateReceiptStrategy();
+  }
+
   if (!wsUrl) {
     return new PollingReceiptStrategy();
   }
