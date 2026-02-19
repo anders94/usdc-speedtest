@@ -27,6 +27,10 @@ const GAS_DISPERSE_TOKEN_BASE = 50_000n;
 const GAS_DISPERSE_TOKEN_PER_ADDR = 70_000n;
 // Gas for an ERC-20 approve tx
 const GAS_ERC20_APPROVE = 50_000n;
+// Minimum assumed cost per transaction (wei). On L2 chains (Base, OP Stack),
+// gasPrice only reflects the L2 execution cost and misses L1 data posting fees
+// which typically dominate. This floor ensures accurate estimates on L2s.
+const MIN_COST_PER_TX = 5_000_000_000_000n; // 0.000005 ETH
 // Safety buffer multiplier: 20% extra
 const BUFFER_NUMERATOR = 120n;
 const BUFFER_DENOMINATOR = 100n;
@@ -65,11 +69,17 @@ function estimateEthPerWallet(
   const usdcSweepTx = 1n;
   const ethSweepTx = 1n;
 
+  const totalTxs = testTxs + returnTx + usdcSweepTx + ethSweepTx;
+
   const totalErc20Gas = (testTxs + returnTx + usdcSweepTx) * GAS_PER_ERC20_TRANSFER;
   const totalEthGas = ethSweepTx * GAS_PER_ETH_TRANSFER;
   const totalGas = totalErc20Gas + totalEthGas;
 
-  const baseAmount = totalGas * gasPrice;
+  const gasPriceEstimate = totalGas * gasPrice;
+  const floorEstimate = totalTxs * MIN_COST_PER_TX;
+
+  // Use whichever is higher: gas-based estimate (accurate on L1) or floor (covers L2 data fees)
+  const baseAmount = gasPriceEstimate > floorEstimate ? gasPriceEstimate : floorEstimate;
   return (baseAmount * BUFFER_NUMERATOR) / BUFFER_DENOMINATOR;
 }
 
@@ -93,14 +103,40 @@ export async function checkAndFund(
   console.log();
 
   const usdc = getUsdcContract(network.usdcAddress, provider);
+
+  // Query all wallet balances in parallel
+  const balances = await Promise.all(
+    wallets.map(async (w) => {
+      const [ethBalance, usdcBalance] = await Promise.all([
+        provider.getBalance(w.address),
+        usdc.balanceOf(w.address) as Promise<bigint>,
+      ]);
+      return { address: w.address, ethBalance, usdcBalance };
+    })
+  );
+
+  spinner.stop();
+
+  // Display current balances
+  const balanceRows: string[][] = [["Wallet", "Address", "ETH Balance", "USDC Balance"]];
+  for (let i = 0; i < balances.length; i++) {
+    const b = balances[i];
+    const role = i % 2 === 0 ? "sender" : "receiver";
+    balanceRows.push([
+      `#${i} ${role}`,
+      `${b.address.slice(0, 6)}...${b.address.slice(-4)}`,
+      formatEther(b.ethBalance),
+      formatUsdc(b.usdcBalance),
+    ]);
+  }
+  log.table(balanceRows);
+  console.log();
+
+  // Build funding plan
   const plan: FundingItem[] = [];
 
   for (let i = 0; i < wallets.length; i++) {
-    const addr = wallets[i].address;
-    const [ethBalance, usdcBalance] = await Promise.all([
-      provider.getBalance(addr),
-      usdc.balanceOf(addr) as Promise<bigint>,
-    ]);
+    const { address, ethBalance, usdcBalance } = balances[i];
 
     let ethNeeded = 0n;
     let usdcNeeded = 0n;
@@ -115,11 +151,9 @@ export async function checkAndFund(
     }
 
     if (ethNeeded > 0n || usdcNeeded > 0n) {
-      plan.push({ index: i, address: addr, ethNeeded, usdcNeeded });
+      plan.push({ index: i, address, ethNeeded, usdcNeeded });
     }
   }
-
-  spinner.stop();
 
   if (plan.length === 0) {
     log.success("All wallets are already funded.");

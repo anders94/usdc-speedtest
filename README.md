@@ -14,7 +14,14 @@ npm run build
 export PRIVATE_KEY=0x...
 
 # Run with defaults (Base Sepolia, 5 testers, 60s)
+npx usdc-speedtest
+
+# Or link globally so `usdc-speedtest` works anywhere
+npm link
 usdc-speedtest
+
+# Or run directly without installing
+node dist/cli.js
 ```
 
 ## How It Works

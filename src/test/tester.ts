@@ -2,6 +2,11 @@ import { Wallet, type JsonRpcProvider } from "ethers";
 import { getUsdcContract, USDC_CENT } from "../utils/usdc.js";
 import type { WalletPair } from "../wallet/derive.js";
 
+// Fixed gas limit for USDC transfers — skips eth_estimateGas which can fail
+// on L2s when RPC state hasn't caught up with the just-confirmed prior tx.
+// Typical USDC transfer uses ~40k-65k gas; 100k is generous but safe.
+const TRANSFER_GAS_LIMIT = 100_000n;
+
 export type TxRecord = {
   txHash: string;
   latencyMs: number;
@@ -39,7 +44,9 @@ export async function runTester(
     const startTime = Date.now();
 
     try {
-      const tx = await (sender.transfer as any)(receiverAddr, USDC_CENT);
+      const tx = await (sender.transfer as any)(receiverAddr, USDC_CENT, {
+        gasLimit: TRANSFER_GAS_LIMIT,
+      });
       const receipt = await tx.wait();
       const latencyMs = Date.now() - startTime;
 
@@ -54,8 +61,11 @@ export async function runTester(
     } catch (err: any) {
       // If stopped during a tx, just break — the send failed so USDC didn't move
       if (stopSignal.stopped) break;
+
+      const shortReason =
+        err.reason || err.shortMessage || err.message?.slice(0, 120);
       console.error(
-        `  Tester #${pair.index} error: ${err.message?.slice(0, 80)}`
+        `  Tester #${pair.index} error (${direction}): ${shortReason}`
       );
       break;
     }
@@ -65,11 +75,15 @@ export async function runTester(
   // so that cleanup always finds USDC on the even wallets.
   if (!usdcOnA) {
     try {
-      const tx = await (usdcB.transfer as any)(walletA.address, USDC_CENT);
+      const tx = await (usdcB.transfer as any)(walletA.address, USDC_CENT, {
+        gasLimit: TRANSFER_GAS_LIMIT,
+      });
       await tx.wait();
-    } catch {
+    } catch (err: any) {
+      const shortReason =
+        err.reason || err.shortMessage || err.message?.slice(0, 120);
       console.error(
-        `  Tester #${pair.index}: failed to return USDC to sender wallet`
+        `  Tester #${pair.index}: failed to return USDC to sender wallet: ${shortReason}`
       );
     }
   }

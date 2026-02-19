@@ -1,7 +1,8 @@
-import type { JsonRpcProvider } from "ethers";
+import { type JsonRpcProvider, formatEther } from "ethers";
 import ora from "ora";
 import { runTester, type TesterResult } from "./tester.js";
 import { computeStats, printSummary } from "./stats.js";
+import { getUsdcContract, USDC_CENT, formatUsdc } from "../utils/usdc.js";
 import { confirm } from "../utils/prompt.js";
 import * as log from "../utils/logger.js";
 import type { WalletPair } from "../wallet/derive.js";
@@ -23,6 +24,48 @@ export async function runTest(
     log.warn("Test cancelled.");
     return;
   }
+
+  // Pre-flight: verify sender wallets have USDC and all wallets have ETH
+  const preflight = ora("Pre-flight check: verifying wallet balances...").start();
+  const usdc = getUsdcContract(network.usdcAddress, provider);
+  const problems: string[] = [];
+
+  await Promise.all(
+    pairs.map(async (pair) => {
+      const [senderUsdc, senderEth, receiverEth] = await Promise.all([
+        usdc.balanceOf(pair.sender.address) as Promise<bigint>,
+        provider.getBalance(pair.sender.address),
+        provider.getBalance(pair.receiver.address),
+      ]);
+
+      if (senderUsdc < USDC_CENT) {
+        problems.push(
+          `Tester #${pair.index} sender ${pair.sender.address.slice(0, 6)}...${pair.sender.address.slice(-4)} has ${formatUsdc(senderUsdc)} USDC (need ${formatUsdc(USDC_CENT)})`
+        );
+      }
+      if (senderEth === 0n) {
+        problems.push(
+          `Tester #${pair.index} sender ${pair.sender.address.slice(0, 6)}...${pair.sender.address.slice(-4)} has 0 ETH for gas`
+        );
+      }
+      if (receiverEth === 0n) {
+        problems.push(
+          `Tester #${pair.index} receiver ${pair.receiver.address.slice(0, 6)}...${pair.receiver.address.slice(-4)} has 0 ETH for gas`
+        );
+      }
+    })
+  );
+
+  if (problems.length > 0) {
+    preflight.fail("Pre-flight check failed:");
+    for (const p of problems) {
+      log.error(`  ${p}`);
+    }
+    console.log();
+    log.info("Run without --skip-funding to fund wallets, or use --cleanup and start fresh.");
+    throw new Error("Pre-flight check failed: wallets not ready");
+  }
+  preflight.succeed("Pre-flight check passed — all wallets ready");
 
   const stopSignal = { stopped: false };
   const durationMs = durationSec * 1000;
