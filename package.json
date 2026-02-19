@@ -1,0 +1,41 @@
+{
+  "name": "usdc-speedtest",
+  "version": "1.0.0",
+  "description": "Benchmark EVM network throughput by sending USDC transfers in parallel",
+  "type": "module",
+  "bin": {
+    "usdc-speedtest": "./dist/cli.js"
+  },
+  "main": "./dist/cli.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/cli.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "usdc",
+    "speedtest",
+    "evm",
+    "benchmark",
+    "ethereum",
+    "base",
+    "radius"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.13.5",
+    "ora": "^8.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "tsup": "^8.4.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}
