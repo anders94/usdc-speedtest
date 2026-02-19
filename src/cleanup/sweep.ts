@@ -6,6 +6,7 @@ import {
 } from "ethers";
 import ora from "ora";
 import { getUsdcContract, formatUsdc } from "../utils/usdc.js";
+import { pMap } from "../utils/concurrency.js";
 import { confirm } from "../utils/prompt.js";
 import * as log from "../utils/logger.js";
 import type { NetworkConfig } from "../config/networks.js";
@@ -27,19 +28,22 @@ export async function sweepFunds(
     usdcBalance: bigint;
   };
 
-  const items: SweepItem[] = [];
+  // Query balances with limited concurrency to avoid RPC rate limits
+  const allBalances = await pMap(
+    wallets,
+    async (w, i) => {
+      const [ethBalance, usdcBalance] = await Promise.all([
+        provider.getBalance(w.address),
+        usdc.balanceOf(w.address) as Promise<bigint>,
+      ]);
+      return { index: i, address: w.address, ethBalance, usdcBalance };
+    },
+    10
+  );
 
-  for (let i = 0; i < wallets.length; i++) {
-    const addr = wallets[i].address;
-    const [ethBalance, usdcBalance] = await Promise.all([
-      provider.getBalance(addr),
-      usdc.balanceOf(addr) as Promise<bigint>,
-    ]);
-
-    if (ethBalance > 0n || usdcBalance > 0n) {
-      items.push({ index: i, address: addr, ethBalance, usdcBalance });
-    }
-  }
+  const items: SweepItem[] = allBalances.filter(
+    (b) => b.ethBalance > 0n || b.usdcBalance > 0n
+  );
 
   spinner.stop();
 

@@ -3,6 +3,7 @@ import ora from "ora";
 import { runTester, type TesterResult } from "./tester.js";
 import { computeStats, printSummary } from "./stats.js";
 import { getUsdcContract, USDC_CENT, formatUsdc } from "../utils/usdc.js";
+import { pMap } from "../utils/concurrency.js";
 import { confirm } from "../utils/prompt.js";
 import * as log from "../utils/logger.js";
 import type { WalletPair } from "../wallet/derive.js";
@@ -30,8 +31,9 @@ export async function runTest(
   const usdc = getUsdcContract(network.usdcAddress, provider);
   const problems: string[] = [];
 
-  await Promise.all(
-    pairs.map(async (pair) => {
+  await pMap(
+    pairs,
+    async (pair) => {
       const [senderUsdc, senderEth, receiverEth] = await Promise.all([
         usdc.balanceOf(pair.sender.address) as Promise<bigint>,
         provider.getBalance(pair.sender.address),
@@ -53,7 +55,8 @@ export async function runTest(
           `Tester #${pair.index} receiver ${pair.receiver.address.slice(0, 6)}...${pair.receiver.address.slice(-4)} has 0 ETH for gas`
         );
       }
-    })
+    },
+    10
   );
 
   if (problems.length > 0) {

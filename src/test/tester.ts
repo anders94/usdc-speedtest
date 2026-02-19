@@ -61,6 +61,10 @@ export async function runTester(
   const usdcA = getUsdcContract(usdcAddress, walletA);
   const usdcB = getUsdcContract(usdcAddress, walletB);
 
+  // Fetch nonces once upfront — track locally to avoid stale RPC reads
+  let nonceA = await provider.getTransactionCount(walletA.address, "pending");
+  let nonceB = await provider.getTransactionCount(walletB.address, "pending");
+
   const transactions: TxRecord[] = [];
   // usdcOnA tracks whether the USDC is currently held by wallet A (the even/sender wallet).
   // It starts true because funding puts USDC on even wallets.
@@ -72,6 +76,7 @@ export async function runTester(
     const sender = usdcOnA ? usdcA : usdcB;
     const receiverAddr = usdcOnA ? walletB.address : walletA.address;
     const direction: TxRecord["direction"] = usdcOnA ? "A→B" : "B→A";
+    const nonce = usdcOnA ? nonceA : nonceB;
 
     const startTime = Date.now();
     let succeeded = false;
@@ -82,6 +87,7 @@ export async function runTester(
       try {
         const tx = await (sender.transfer as any)(receiverAddr, USDC_CENT, {
           gasLimit: TRANSFER_GAS_LIMIT,
+          nonce,
         });
         const receipt = await tx.wait();
         const latencyMs = Date.now() - startTime;
@@ -93,6 +99,8 @@ export async function runTester(
           direction,
         });
 
+        if (usdcOnA) nonceA++;
+        else nonceB++;
         usdcOnA = !usdcOnA;
         succeeded = true;
         break;
@@ -128,6 +136,7 @@ export async function runTester(
       try {
         const tx = await (usdcB.transfer as any)(walletA.address, USDC_CENT, {
           gasLimit: TRANSFER_GAS_LIMIT,
+          nonce: nonceB,
         });
         await tx.wait();
         break;

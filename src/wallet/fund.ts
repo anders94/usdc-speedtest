@@ -12,6 +12,7 @@ import {
   DISPERSE_ADDRESS,
 } from "../utils/disperse.js";
 import { confirm } from "../utils/prompt.js";
+import { pMap } from "../utils/concurrency.js";
 import * as log from "../utils/logger.js";
 import type { NetworkConfig } from "../config/networks.js";
 
@@ -104,15 +105,17 @@ export async function checkAndFund(
 
   const usdc = getUsdcContract(network.usdcAddress, provider);
 
-  // Query all wallet balances in parallel
-  const balances = await Promise.all(
-    wallets.map(async (w) => {
+  // Query wallet balances with limited concurrency to avoid RPC rate limits
+  const balances = await pMap(
+    wallets,
+    async (w) => {
       const [ethBalance, usdcBalance] = await Promise.all([
         provider.getBalance(w.address),
         usdc.balanceOf(w.address) as Promise<bigint>,
       ]);
       return { address: w.address, ethBalance, usdcBalance };
-    })
+    },
+    10
   );
 
   spinner.stop();
