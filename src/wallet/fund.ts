@@ -1,11 +1,13 @@
 import {
   type JsonRpcProvider,
-  type Wallet,
+  Wallet,
   type HDNodeWallet,
   formatEther,
+  Contract,
 } from "ethers";
 import ora from "ora";
-import { getUsdcContract, USDC_CENT, formatUsdc } from "../utils/usdc.js";
+import { getUsdcContract, ERC20_ABI, USDC_CENT, formatUsdc } from "../utils/usdc.js";
+import { rpcSendRawTx } from "../utils/rpc.js";
 import {
   isDisperseAvailable,
   getDisperseContract,
@@ -334,7 +336,11 @@ async function fundWithDisperse(
 }
 
 /**
- * Fund wallets individually with nonce pipelining (fallback when Disperse is unavailable).
+ * Fund wallets individually (fallback when Disperse is unavailable).
+ *
+ * Sends transactions sequentially to guarantee nonce ordering. On immediate-
+ * finality chains (Radius), uses sign+raw-send to avoid ethers' receipt
+ * polling — the RPC response itself confirms the tx.
  */
 async function fundIndividually(
   masterWallet: Wallet,
@@ -344,45 +350,81 @@ async function fundIndividually(
   usdcItems: FundingItem[],
   spinner: ReturnType<typeof ora>
 ): Promise<void> {
+  const immediate = !!network.immediateReceipt;
+
+  // For immediate-finality chains we sign locally and send raw — need chain
+  // ID, fee data and a Wallet without a provider (pure signer).
+  const [feeData, providerNetwork] = immediate
+    ? await Promise.all([provider.getFeeData(), provider.getNetwork()])
+    : [null, null];
+  const signer = immediate
+    ? new Wallet(masterWallet.privateKey) // detached — signTransaction won't touch the provider
+    : masterWallet;
+  const feeOverrides = feeData
+    ? feeData.maxFeePerGas
+      ? { maxFeePerGas: feeData.maxFeePerGas, maxPriorityFeePerGas: feeData.maxPriorityFeePerGas }
+      : { gasPrice: feeData.gasPrice }
+    : {};
+  const txType = feeData?.maxFeePerGas ? 2 : 0;
+
   let nonce = await provider.getTransactionCount(masterWallet.address);
 
-  // Send ETH transfers (pipelined)
-  const ethTxPromises: Promise<void>[] = [];
-  for (const item of ethItems) {
-    const txPromise = masterWallet
-      .sendTransaction({
-        to: item.address,
-        value: item.ethNeeded,
+  // Send ETH transfers sequentially
+  for (let i = 0; i < ethItems.length; i++) {
+    spinner.text = `Sending ETH transfer ${i + 1}/${ethItems.length}...`;
+    if (immediate) {
+      const signed = await signer.signTransaction({
+        to: ethItems[i].address,
+        value: ethItems[i].ethNeeded,
         nonce: nonce++,
-      })
-      .then((tx) => tx.wait())
-      .then(() => {});
-    ethTxPromises.push(txPromise);
-  }
-
-  if (ethTxPromises.length > 0) {
-    spinner.text = `Confirming ${ethTxPromises.length} ETH transfer(s)...`;
-    await Promise.all(ethTxPromises);
+        gasLimit: GAS_PER_ETH_TRANSFER,
+        chainId: providerNetwork!.chainId,
+        type: txType,
+        ...feeOverrides,
+      });
+      await rpcSendRawTx(network.rpcUrl, signed);
+    } else {
+      const tx = await masterWallet.sendTransaction({
+        to: ethItems[i].address,
+        value: ethItems[i].ethNeeded,
+        nonce: nonce++,
+      });
+      await tx.wait();
+    }
   }
 
   // Re-fetch nonce after ETH transfers
   nonce = await provider.getTransactionCount(masterWallet.address);
-  const usdcContract = getUsdcContract(network.usdcAddress, masterWallet);
 
-  const usdcTxPromises: Promise<void>[] = [];
-  for (const item of usdcItems) {
-    const txPromise = (usdcContract.transfer as any)(
-      item.address,
-      item.usdcNeeded,
-      { nonce: nonce++ }
-    )
-      .then((tx: any) => tx.wait())
-      .then(() => {});
-    usdcTxPromises.push(txPromise);
-  }
+  // Pre-encode USDC transfer calldata
+  const iface = new Contract(network.usdcAddress, ERC20_ABI).interface;
 
-  if (usdcTxPromises.length > 0) {
-    spinner.text = `Confirming ${usdcTxPromises.length} USDC transfer(s)...`;
-    await Promise.all(usdcTxPromises);
+  // Send USDC transfers sequentially
+  for (let i = 0; i < usdcItems.length; i++) {
+    spinner.text = `Sending USDC transfer ${i + 1}/${usdcItems.length}...`;
+    if (immediate) {
+      const data = iface.encodeFunctionData("transfer", [
+        usdcItems[i].address,
+        usdcItems[i].usdcNeeded,
+      ]);
+      const signed = await signer.signTransaction({
+        to: network.usdcAddress,
+        data,
+        nonce: nonce++,
+        gasLimit: GAS_PER_ERC20_TRANSFER,
+        chainId: providerNetwork!.chainId,
+        type: txType,
+        ...feeOverrides,
+      });
+      await rpcSendRawTx(network.rpcUrl, signed);
+    } else {
+      const usdcContract = getUsdcContract(network.usdcAddress, masterWallet);
+      const tx = await (usdcContract.transfer as any)(
+        usdcItems[i].address,
+        usdcItems[i].usdcNeeded,
+        { nonce: nonce++ }
+      );
+      await tx.wait();
+    }
   }
 }

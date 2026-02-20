@@ -1,5 +1,6 @@
 import { Contract, Wallet, type JsonRpcProvider } from "ethers";
 import { ERC20_ABI, USDC_CENT } from "../utils/usdc.js";
+import { rpcSendRawTx } from "../utils/rpc.js";
 import type { WalletPair } from "../wallet/derive.js";
 import type { ReceiptStrategy } from "./receipt.js";
 
@@ -40,6 +41,10 @@ function isTransientError(err: any): boolean {
     msg.includes("network error") ||
     msg.includes("missing response") ||
     msg.includes("bad response") ||
+    msg.includes("too many") ||
+    msg.includes("http 502") ||
+    msg.includes("http 503") ||
+    msg.includes("http 504") ||
     err.code === "TIMEOUT" ||
     err.code === "NETWORK_ERROR" ||
     err.code === "SERVER_ERROR"
@@ -50,44 +55,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Shared undici Pool for the hot path — uses HTTP/2 when the server supports
- *  it so all testers multiplex over a single TCP connection. */
-import { Pool } from "undici";
-
-let _pool: Pool | null = null;
-let _poolPath = "/";
-let _rpcId = 0;
-
-async function rpcSendRawTx(rpcUrl: string, signedTx: string): Promise<any> {
-  if (!_pool) {
-    const url = new URL(rpcUrl);
-    _pool = new Pool(url.origin, {
-      allowH2: true,
-      connections: 256,
-      pipelining: 1,
-    });
-    _poolPath = url.pathname || "/";
-  }
-
-  const { statusCode, body } = await _pool.request({
-    method: "POST",
-    path: _poolPath,
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      method: "eth_sendRawTransaction",
-      params: [signedTx],
-      id: ++_rpcId,
-    }),
-  });
-
-  const json = (await body.json()) as any;
-  if (json.error) {
-    const msg = json.error.message || JSON.stringify(json.error);
-    throw new Error(msg);
-  }
-  return json.result;
-}
 
 export async function runTester(
   pair: WalletPair,
