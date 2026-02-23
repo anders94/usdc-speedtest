@@ -18,6 +18,7 @@ export type TxRecord = {
   latencyMs: number;
   gasUsed: bigint;
   direction: "A→B" | "B→A";
+  timestampMs: number;
 };
 
 export type TesterResult = {
@@ -64,7 +65,8 @@ export async function runTester(
   stopSignal: { stopped: boolean },
   receiptStrategy: ReceiptStrategy,
   immediateReceipt?: boolean,
-  rpcUrl?: string
+  rpcUrl?: string,
+  trafficCurve?: { currentTarget: number }
 ): Promise<TesterResult> {
   const walletA = new Wallet(pair.sender.privateKey, provider);
   const walletB = new Wallet(pair.receiver.privateKey, provider);
@@ -110,6 +112,14 @@ export async function runTester(
   let erroredOut = false;
 
   while (!stopSignal.stopped) {
+    // Traffic shaping: probabilistic skip to throttle throughput
+    if (trafficCurve) {
+      while (!stopSignal.stopped && Math.random() > trafficCurve.currentTarget) {
+        await sleep(200);
+      }
+      if (stopSignal.stopped) break;
+    }
+
     const wallet = usdcOnA ? walletA : walletB;
     const data = usdcOnA ? dataAtoB : dataBtoA;
     const direction: TxRecord["direction"] = usdcOnA ? "A→B" : "B→A";
@@ -144,7 +154,7 @@ export async function runTester(
           }
 
           const latencyMs = Date.now() - startTime;
-          transactions.push({ txHash, latencyMs, gasUsed, direction });
+          transactions.push({ txHash, latencyMs, gasUsed, direction, timestampMs: Date.now() });
         } else {
           // Standard path: send + wait for receipt (2 RPC round trips)
           const tx = await wallet.sendTransaction({
@@ -169,6 +179,7 @@ export async function runTester(
             latencyMs,
             gasUsed: receipt.gasUsed,
             direction,
+            timestampMs: Date.now(),
           });
         }
 

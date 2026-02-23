@@ -7,6 +7,7 @@ import {
   ImmediateReceiptStrategy,
 } from "./receipt.js";
 import { computeStats, printSummary } from "./stats.js";
+import { generateCurve, type TrafficCurve } from "./traffic-curve.js";
 import { getUsdcContract, USDC_CENT, formatUsdc } from "../utils/usdc.js";
 import { pMap } from "../utils/concurrency.js";
 import { confirm } from "../utils/prompt.js";
@@ -18,7 +19,8 @@ export async function runTest(
   pairs: WalletPair[],
   provider: JsonRpcProvider,
   network: NetworkConfig,
-  durationSec: number
+  durationSec: number,
+  trafficShape?: boolean
 ): Promise<void> {
   log.header(`Ready to Start — ${network.name}`);
   log.info(`${pairs.length} parallel testers for ${durationSec} seconds`);
@@ -88,6 +90,14 @@ export async function runTest(
         ? "WebSocket"
         : "polling";
 
+  // Traffic shaping curve
+  let curve: TrafficCurve | undefined;
+  if (trafficShape) {
+    curve = generateCurve(durationSec * 1000);
+    log.info(curve.describe());
+    console.log();
+  }
+
   const stopSignal = { stopped: false };
   const durationMs = durationSec * 1000;
   let testEndTime = 0;
@@ -114,6 +124,13 @@ export async function runTest(
   const startTime = Date.now();
   const doneCount = { value: 0 };
 
+  // Curve tick interval (updates currentTarget every 100ms)
+  const curveInterval = curve
+    ? setInterval(() => {
+        curve!.tick(Date.now() - startTime);
+      }, 100)
+    : undefined;
+
   // Progress update interval
   const progressInterval = setInterval(() => {
     if (stopSignal.stopped) {
@@ -124,7 +141,10 @@ export async function runTest(
         Math.floor((Date.now() - startTime) / 1000),
         durationSec
       );
-      spinner.text = `Running test (${mode})... ${elapsed}s / ${durationSec}s (Ctrl+C to stop early)`;
+      const targetSuffix = curve
+        ? ` | target: ${Math.round(curve.currentTarget * 100)}%`
+        : "";
+      spinner.text = `Running test (${mode})... ${elapsed}s / ${durationSec}s${targetSuffix} (Ctrl+C to stop early)`;
     }
   }, 1000);
 
@@ -139,7 +159,8 @@ export async function runTest(
         stopSignal,
         receiptStrategy,
         network.immediateReceipt,
-        network.rpcUrl
+        network.rpcUrl,
+        curve
       );
       doneCount.value++;
       return result;
@@ -148,6 +169,7 @@ export async function runTest(
 
   clearTimeout(timer);
   clearInterval(progressInterval);
+  if (curveInterval) clearInterval(curveInterval);
   process.removeListener("SIGINT", sigintHandler);
 
   // Tear down WebSocket connection if active
@@ -161,5 +183,5 @@ export async function runTest(
 
   // Compute and display stats
   const stats = computeStats(results, actualDurationMs);
-  printSummary(stats, network.name, pairs.length, results);
+  printSummary(stats, network.name, pairs.length, results, trafficShape);
 }

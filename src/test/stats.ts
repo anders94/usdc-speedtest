@@ -63,7 +63,8 @@ export function printSummary(
   stats: TestSummary,
   networkName: string,
   parallelTesters: number,
-  results: TesterResult[]
+  results: TesterResult[],
+  trafficShaped?: boolean
 ): void {
   log.header(`USDC Speedtest Results — ${networkName}`);
 
@@ -106,6 +107,11 @@ export function printSummary(
     console.log(
       chalk.white(`    Tester #${r.pairIndex}:  ${count} txs,  avg ${fmtMs(avg)}`) + status
     );
+  }
+
+  if (trafficShaped) {
+    console.log();
+    console.log(chalk.yellow("  Note: Throughput reflects traffic-shaped load, not maximum capacity"));
   }
 
   console.log(chalk.cyan("\n" + "═".repeat(60) + "\n"));

@@ -29,7 +29,8 @@ program
     "baseSepolia"
   )
   .option("-p, --parallel <count>", "number of parallel testers", "5")
-  .option("-d, --duration <seconds>", "test duration in seconds", "60")
+  .option("-d, --duration <seconds>", "test duration in seconds")
+  .option("--traffic-shape", "vary load over time using a random traffic curve")
   .option("--rpc <url>", "override RPC endpoint")
   .option("--usdc-address <addr>", "override USDC contract address")
   .option("--chain-id <id>", "override chain ID")
@@ -68,7 +69,12 @@ async function main() {
   }
 
   const parallelCount = parseInt(opts.parallel);
-  const durationSec = parseInt(opts.duration);
+  const trafficShape = !!opts.trafficShape;
+  const durationSec = opts.duration
+    ? parseInt(opts.duration)
+    : trafficShape
+      ? 1800
+      : 60;
   const walletCount = parallelCount * 2;
 
   log.header("USDC Speedtest");
@@ -79,6 +85,9 @@ async function main() {
   }
   log.info(`Parallel:   ${parallelCount} testers (${walletCount} wallets)`);
   log.info(`Duration:   ${durationSec}s`);
+  if (trafficShape) {
+    log.info(`Mode:       traffic shaping`);
+  }
   console.log();
 
   // Connect
@@ -111,7 +120,7 @@ async function main() {
 
   // Pair wallets and run test
   const pairs = pairWallets(wallets);
-  await runTest(pairs, provider, network, durationSec);
+  await runTest(pairs, provider, network, durationSec, trafficShape);
 }
 
 main().catch((err) => {
