@@ -40,7 +40,8 @@ usdc-speedtest [options]
 Options:
   -n, --network <name>      Network name (default: "baseSepolia")
   -p, --parallel <count>    Number of parallel testers (default: "5")
-  -d, --duration <seconds>  Test duration in seconds (default: "60")
+  -d, --duration <seconds>  Test duration in seconds (default: 60, or 1800 with --traffic-shape)
+  --traffic-shape           Vary load over time using a random traffic curve
   --rpc <url>               Override RPC endpoint
   --usdc-address <addr>     Override USDC contract address
   --chain-id <id>           Override chain ID
@@ -94,9 +95,23 @@ usdc-speedtest -n mainnet -p 3 -d 30
 # Custom RPC and USDC address
 usdc-speedtest --rpc https://my-rpc.example.com --usdc-address 0x... --chain-id 12345
 
+# Traffic shaping: ramp load up and down over 30 minutes
+usdc-speedtest --traffic-shape -p 4
+
+# Traffic shaping with custom duration
+usdc-speedtest --traffic-shape -p 4 -d 120
+
 # Sweep all funds back to master wallet
 usdc-speedtest --cleanup
 ```
+
+## Traffic Shaping
+
+The `--traffic-shape` flag runs a longer test where throughput varies over time following a randomly generated curve. This is useful for testing how chains handle autoscaling under fluctuating load.
+
+When enabled, a random sequence of waypoints is generated (e.g. 25% → 77% over 2min → 16% over 5min → 50% over 1min). Each tester uses probabilistic throttling to match the current target — at 50% target, testers proceed roughly half the time; at 10%, they mostly wait. The curve is logged before the test starts and the spinner shows the current target percentage in real time.
+
+Without `-d`, duration defaults to 1800s (30 minutes) to give the curve enough time to exercise a range of load levels.
 
 ## Development
 
@@ -116,6 +131,7 @@ src/
   wallet/fund.ts          Balance checks, funding plan, Disperse batching
   test/runner.ts          Parallel test orchestration, Ctrl+C handling
   test/tester.ts          Single tester: ping-pong USDC between wallet pair
+  test/traffic-curve.ts   Random traffic curve generation and interpolation
   test/stats.ts           Statistics computation and display
   cleanup/sweep.ts        Sweep USDC and ETH back to master
   utils/usdc.ts           ERC-20 ABI and USDC helpers
