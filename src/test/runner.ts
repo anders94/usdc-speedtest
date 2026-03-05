@@ -52,17 +52,17 @@ export async function runTest(
 
       if (senderUsdc < USDC_CENT) {
         problems.push(
-          `Tester #${pair.index} sender ${pair.sender.address.slice(0, 6)}...${pair.sender.address.slice(-4)} has ${formatUsdc(senderUsdc)} USDC (need ${formatUsdc(USDC_CENT)})`
+          `Tester #${pair.index} sender ${pair.sender.address} has ${formatUsdc(senderUsdc)} USDC (need ${formatUsdc(USDC_CENT)})`
         );
       }
       if (senderEth === 0n) {
         problems.push(
-          `Tester #${pair.index} sender ${pair.sender.address.slice(0, 6)}...${pair.sender.address.slice(-4)} has 0 ${gasLabel} for gas`
+          `Tester #${pair.index} sender ${pair.sender.address} has 0 ${gasLabel} for gas`
         );
       }
       if (receiverEth === 0n) {
         problems.push(
-          `Tester #${pair.index} receiver ${pair.receiver.address.slice(0, 6)}...${pair.receiver.address.slice(-4)} has 0 ${gasLabel} for gas`
+          `Tester #${pair.index} receiver ${pair.receiver.address} has 0 ${gasLabel} for gas`
         );
       }
     },

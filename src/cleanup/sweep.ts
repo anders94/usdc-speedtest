@@ -69,7 +69,7 @@ export async function sweepFunds(
   for (const item of items) {
     rows.push([
       `#${item.index}`,
-      `${item.address.slice(0, 6)}...${item.address.slice(-4)}`,
+      item.address,
       formatEther(item.ethBalance),
       formatUsdc(item.usdcBalance),
     ]);

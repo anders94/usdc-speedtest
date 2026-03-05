@@ -188,7 +188,7 @@ export async function checkAndFund(
   for (const item of plan) {
     rows.push([
       `#${item.index}`,
-      `${item.address.slice(0, 6)}...${item.address.slice(-4)}`,
+      item.address,
       item.ethNeeded > 0n ? formatEther(item.ethNeeded) : "—",
       item.usdcNeeded > 0n ? formatUsdc(item.usdcNeeded) : "—",
     ]);
@@ -631,7 +631,7 @@ async function diagnoseBalanceDiscrepancy(
   const gasPrice = feeData.gasPrice ?? feeData.maxFeePerGas ?? 1_000_000_000n;
 
   for (const item of ethItems) {
-    const label = `#${item.index} (${item.address.slice(0, 6)}...${item.address.slice(-4)})`;
+    const label = `#${item.index} (${item.address})`;
     const txObj = {
       from: masterWallet.address,
       to: item.address,
@@ -760,7 +760,7 @@ async function fundIndividually(
           continue;
         }
         throw new Error(
-          `${gasLabel} transfer ${i + 1}/${ethItems.length} to wallet #${item.index} (${item.address.slice(0, 6)}...${item.address.slice(-4)}) failed after ${attempt + 1} attempts: ${extractError(err)}`
+          `${gasLabel} transfer ${i + 1}/${ethItems.length} to wallet #${item.index} (${item.address}) failed after ${attempt + 1} attempts: ${extractError(err)}`
         );
       }
     }
@@ -789,7 +789,7 @@ async function fundIndividually(
           continue;
         }
         throw new Error(
-          `USDC transfer ${i + 1}/${usdcItems.length} to wallet #${item.index} (${item.address.slice(0, 6)}...${item.address.slice(-4)}) failed after ${attempt + 1} attempts: ${extractError(err)}`
+          `USDC transfer ${i + 1}/${usdcItems.length} to wallet #${item.index} (${item.address}) failed after ${attempt + 1} attempts: ${extractError(err)}`
         );
       }
     }
