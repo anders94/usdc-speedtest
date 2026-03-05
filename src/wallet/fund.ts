@@ -137,7 +137,7 @@ export async function checkAndFund(
     const role = i % 2 === 0 ? "sender" : "receiver";
     balanceRows.push([
       `#${i} ${role}`,
-      `${b.address.slice(0, 6)}...${b.address.slice(-4)}`,
+      b.address,
       formatEther(b.ethBalance),
       formatUsdc(b.usdcBalance),
     ]);
