@@ -8,6 +8,7 @@ export type NetworkConfig = {
   blockExplorerUrl?: string;
   immediateReceipt?: boolean;
   supported: boolean;
+  gasTokenAddress?: string;
 };
 
 const networks: Record<string, NetworkConfig> = {
@@ -51,12 +52,13 @@ const networks: Record<string, NetworkConfig> = {
   },
   radius: {
     name: "Radius",
-    chainId: 0,
-    rpcUrl: "",
+    chainId: 723,
+    rpcUrl: "https://rpc.radiustech.xyz",
     usdcAddress: "",
     estimatedBlockTimeMs: 500,
     immediateReceipt: true,
     supported: false,
+    gasTokenAddress: "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb",
   },
   radiusTestnet: {
     name: "Radius Testnet",
@@ -66,6 +68,7 @@ const networks: Record<string, NetworkConfig> = {
     estimatedBlockTimeMs: 500,
     immediateReceipt: true,
     supported: false,
+    gasTokenAddress: "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb",
   },
 };
 

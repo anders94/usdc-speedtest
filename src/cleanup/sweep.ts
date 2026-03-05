@@ -20,6 +20,10 @@ export async function sweepFunds(
   const spinner = ora("Checking derived wallet balances...").start();
 
   const usdc = getUsdcContract(network.usdcAddress, provider);
+  const gasToken = network.gasTokenAddress
+    ? getUsdcContract(network.gasTokenAddress, provider)
+    : null;
+  const gasLabel = gasToken ? "Gas Token" : "ETH";
 
   type SweepItem = {
     index: number;
@@ -57,11 +61,11 @@ export async function sweepFunds(
   const totalEth = items.reduce((s, i) => s + i.ethBalance, 0n);
   const totalUsdc = items.reduce((s, i) => s + i.usdcBalance, 0n);
 
-  log.info(`ETH to recover:  ${formatEther(totalEth)} ETH`);
+  log.info(`${gasLabel} to recover:  ${formatEther(totalEth)}`);
   log.info(`USDC to recover: ${formatUsdc(totalUsdc)}`);
   console.log();
 
-  const rows: string[][] = [["Wallet", "Address", "ETH", "USDC"]];
+  const rows: string[][] = [["Wallet", "Address", gasLabel, "USDC"]];
   for (const item of items) {
     rows.push([
       `#${item.index}`,
@@ -102,42 +106,58 @@ export async function sweepFunds(
     await Promise.all(usdcSweeps);
   }
 
-  // Step 2: Sweep ETH (estimate gas cost and send the remainder)
+  // Step 2: Sweep ETH / gas token (estimate gas cost and send the remainder)
   const ethSweeps: Promise<void>[] = [];
   for (const item of items) {
     const wallet = new Wallet(wallets[item.index].privateKey, provider);
-    const currentBalance = await provider.getBalance(wallet.address);
 
-    if (currentBalance === 0n) continue;
-
-    try {
-      const feeData = await provider.getFeeData();
-      const gasPrice = feeData.gasPrice ?? 50_000_000_000n;
-      const gasCost = 21000n * gasPrice;
-
-      if (currentBalance > gasCost) {
-        const sendAmount = currentBalance - gasCost;
-        const promise = wallet
-          .sendTransaction({
-            to: masterAddress,
-            value: sendAmount,
-            gasLimit: 21000,
-          })
-          .then((tx) => tx.wait())
+    if (gasToken) {
+      // Gas-token chain: sweep the ERC-20 gas token (same pattern as USDC sweep)
+      const balance = await (gasToken.balanceOf(wallet.address) as Promise<bigint>);
+      if (balance > 0n) {
+        const gasTokenWithSigner = getUsdcContract(network.gasTokenAddress!, wallet);
+        const promise = (gasTokenWithSigner.transfer as any)(
+          masterAddress,
+          balance
+        )
+          .then((tx: any) => tx.wait())
           .then(() => {});
         ethSweeps.push(promise);
       }
-    } catch {
-      // If we can't estimate, skip this wallet
+    } else {
+      const currentBalance = await provider.getBalance(wallet.address);
+
+      if (currentBalance === 0n) continue;
+
+      try {
+        const feeData = await provider.getFeeData();
+        const gasPrice = feeData.gasPrice ?? 50_000_000_000n;
+        const gasCost = 21000n * gasPrice;
+
+        if (currentBalance > gasCost) {
+          const sendAmount = currentBalance - gasCost;
+          const promise = wallet
+            .sendTransaction({
+              to: masterAddress,
+              value: sendAmount,
+              gasLimit: 21000,
+            })
+            .then((tx) => tx.wait())
+            .then(() => {});
+          ethSweeps.push(promise);
+        }
+      } catch {
+        // If we can't estimate, skip this wallet
+      }
     }
   }
 
   if (ethSweeps.length > 0) {
-    sweepSpinner.text = `Sweeping ETH from ${ethSweeps.length} wallet(s)...`;
+    sweepSpinner.text = `Sweeping ${gasLabel} from ${ethSweeps.length} wallet(s)...`;
     await Promise.all(ethSweeps);
   }
 
   sweepSpinner.succeed(
-    `Swept ${usdcSweeps.length} USDC + ${ethSweeps.length} ETH transfers back to master`
+    `Swept ${usdcSweeps.length} USDC + ${ethSweeps.length} ${gasLabel} transfers back to master`
   );
 }

@@ -26,13 +26,10 @@ export function computeStats(
   results: TesterResult[],
   durationMs: number
 ): TestSummary {
-  // Only include testers that ran the full duration (not errored out)
-  const cleanResults = results.filter((r) => r.completedCleanly);
-
   const allLatencies: number[] = [];
   let totalGas = 0n;
 
-  for (const r of cleanResults) {
+  for (const r of results) {
     for (const tx of r.transactions) {
       allLatencies.push(tx.latencyMs);
       totalGas += tx.gasUsed;

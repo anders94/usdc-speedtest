@@ -47,6 +47,8 @@ Options:
   --chain-id <id>           Override chain ID
   --cleanup                 Sweep funds from derived wallets back to master
   --skip-funding            Skip the wallet funding step
+  --seed-gas <address>      Seed a target address with RUSD (Radius only)
+  --seed-rounds <n>         Number of seed-gas iterations (Radius only - default: 10)
   -h, --help                Display help
 ```
 
@@ -66,7 +68,7 @@ Create a `.env` file in the project root or set it in your shell. The master wal
 | Ethereum Sepolia | `sepolia` | 11155111 | ~12s |
 | Base | `base` | 8453 | ~2s |
 | **Base Sepolia** | `baseSepolia` | 84532 | ~2s |
-| Radius | `radius` | — | ~0.5s |
+| Radius | `radius` | 723 | ~0.5s |
 | Radius Testnet | `radiusTestnet` | — | ~0.5s |
 
 For networks without built-in configs (or custom chains), use `--rpc`, `--usdc-address`, and `--chain-id` overrides.
@@ -103,6 +105,9 @@ usdc-speedtest --traffic-shape -p 4 -d 120
 
 # Sweep all funds back to master wallet
 usdc-speedtest --cleanup
+
+# Seed a Radius address with RUSD (5 rounds)
+usdc-speedtest -n radius --seed-gas 0xTARGET --seed-rounds 5 --rpc https://rpc.radiustech.xyz/...
 ```
 
 ## Traffic Shaping
@@ -112,6 +117,18 @@ The `--traffic-shape` flag runs a longer test where throughput varies over time 
 When enabled, a random sequence of waypoints is generated (e.g. 25% → 77% over 2min → 16% over 5min → 50% over 1min). Each tester uses probabilistic throttling to match the current target — at 50% target, testers proceed roughly half the time; at 10%, they mostly wait. The curve is logged before the test starts and the spinner shows the current target percentage in real time.
 
 Without `-d`, duration defaults to 1800s (30 minutes) to give the curve enough time to exercise a range of load levels.
+
+## RUSD Seeding (Radius)
+
+On Radius, the native gas token (RUSD) is created by an automatic "turnstile" that converts SBC (an ERC-20) into RUSD ~$0.10 at a time, triggered whenever a transaction needs more RUSD than is available. The `--seed-gas` mode exploits this to accumulate RUSD on a target address.
+
+Each round:
+1. Queries the master wallet's actual RUSD balance via `rad_getBalanceRaw()`
+2. Sends available RUSD to the target as a native transfer
+3. Sends 1 wei of SBC to the target, which triggers the turnstile and refills ~$0.10 RUSD on master
+4. Repeats
+
+The loop stops early if SBC balance is too low or RUSD is dust. A summary table is printed at the end.
 
 ## Development
 
@@ -133,6 +150,7 @@ src/
   test/tester.ts          Single tester: ping-pong USDC between wallet pair
   test/traffic-curve.ts   Random traffic curve generation and interpolation
   test/stats.ts           Statistics computation and display
+  radius/seed-gas.ts      RUSD seeding loop for Radius
   cleanup/sweep.ts        Sweep USDC and ETH back to master
   utils/usdc.ts           ERC-20 ABI and USDC helpers
   utils/disperse.ts       Disperse.app contract detection and helpers

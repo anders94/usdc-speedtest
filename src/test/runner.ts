@@ -14,13 +14,15 @@ import { confirm } from "../utils/prompt.js";
 import * as log from "../utils/logger.js";
 import type { WalletPair } from "../wallet/derive.js";
 import type { NetworkConfig } from "../config/networks.js";
+import type { GasLimits } from "../cli.js";
 
 export async function runTest(
   pairs: WalletPair[],
   provider: JsonRpcProvider,
   network: NetworkConfig,
   durationSec: number,
-  trafficShape?: boolean
+  trafficShape?: boolean,
+  gasLimits?: GasLimits
 ): Promise<void> {
   log.header(`Ready to Start — ${network.name}`);
   log.info(`${pairs.length} parallel testers for ${durationSec} seconds`);
@@ -33,9 +35,10 @@ export async function runTest(
     return;
   }
 
-  // Pre-flight: verify sender wallets have USDC and all wallets have ETH
+  // Pre-flight: verify sender wallets have USDC and all wallets have gas
   const preflight = ora("Pre-flight check: verifying wallet balances...").start();
   const usdc = getUsdcContract(network.usdcAddress, provider);
+  const gasLabel = network.gasTokenAddress ? "gas token" : "ETH";
   const problems: string[] = [];
 
   await pMap(
@@ -54,12 +57,12 @@ export async function runTest(
       }
       if (senderEth === 0n) {
         problems.push(
-          `Tester #${pair.index} sender ${pair.sender.address.slice(0, 6)}...${pair.sender.address.slice(-4)} has 0 ETH for gas`
+          `Tester #${pair.index} sender ${pair.sender.address.slice(0, 6)}...${pair.sender.address.slice(-4)} has 0 ${gasLabel} for gas`
         );
       }
       if (receiverEth === 0n) {
         problems.push(
-          `Tester #${pair.index} receiver ${pair.receiver.address.slice(0, 6)}...${pair.receiver.address.slice(-4)} has 0 ETH for gas`
+          `Tester #${pair.index} receiver ${pair.receiver.address.slice(0, 6)}...${pair.receiver.address.slice(-4)} has 0 ${gasLabel} for gas`
         );
       }
     },
@@ -160,7 +163,8 @@ export async function runTest(
         receiptStrategy,
         network.immediateReceipt,
         network.rpcUrl,
-        curve
+        curve,
+        gasLimits?.erc20Transfer
       );
       doneCount.value++;
       return result;
@@ -177,7 +181,9 @@ export async function runTest(
     await receiptStrategy.destroy();
   }
 
-  // Use the time the stop signal fired (not when cleanup finished) for accurate throughput
+  // Use the time the stop signal fired; if it never fired (all testers finished
+  // before the timer), use now.
+  if (!testEndTime) testEndTime = Date.now();
   const actualDurationMs = testEndTime - startTime;
   spinner.stop();
 

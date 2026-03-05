@@ -1,13 +1,10 @@
 import { Contract, Wallet, type JsonRpcProvider } from "ethers";
 import { ERC20_ABI, USDC_CENT } from "../utils/usdc.js";
-import { rpcSendRawTx } from "../utils/rpc.js";
 import type { WalletPair } from "../wallet/derive.js";
 import type { ReceiptStrategy } from "./receipt.js";
 
-// Fixed gas limit for USDC transfers — skips eth_estimateGas which can fail
-// on L2s when RPC state hasn't caught up with the just-confirmed prior tx.
-// Typical USDC transfer uses ~40k-65k gas; 100k is generous but safe.
-const TRANSFER_GAS_LIMIT = 100_000n;
+// Fallback gas limit for USDC transfers when no RPC estimate is available.
+const DEFAULT_TRANSFER_GAS_LIMIT = 100_000n;
 
 // Retry config for transient RPC errors (rate limits, connection drops)
 const MAX_RETRIES = 3;
@@ -28,10 +25,42 @@ export type TesterResult = {
   completedCleanly: boolean;
 };
 
+/** Dig through ethers' error wrappers to find the real RPC message + data. */
+function extractRpcError(err: any): string {
+  const inner = err.error || err.info?.error;
+  const data = inner?.data || err.error?.error?.data;
+  const msg =
+    err.error?.error?.message ||
+    err.error?.message ||
+    err.info?.error?.message ||
+    err.reason ||
+    err.shortMessage ||
+    err.message?.slice(0, 200) ||
+    String(err);
+  return data ? `${msg}: ${data}` : msg;
+}
+
+/** Check if an RPC error is deterministic (should NOT be retried). */
+function isDeterministicError(err: any): boolean {
+  const full = extractRpcError(err).toLowerCase();
+  return (
+    full.includes("lack of funds") ||
+    full.includes("insufficient funds") ||
+    full.includes("insufficient balance") ||
+    full.includes("exceeds balance") ||
+    full.includes("not enough funds") ||
+    full.includes("reverted") ||
+    full.includes("nonce too low")
+  );
+}
+
 /** Check if an error is transient (RPC issue, not an on-chain revert). */
 function isTransientError(err: any): boolean {
+  if (isDeterministicError(err)) return false;
+
   const msg = (err.message || err.shortMessage || "").toLowerCase();
   return (
+    msg.includes("exec failed") ||
     msg.includes("could not coalesce error") ||
     msg.includes("timeout") ||
     msg.includes("rate limit") ||
@@ -66,8 +95,10 @@ export async function runTester(
   receiptStrategy: ReceiptStrategy,
   immediateReceipt?: boolean,
   rpcUrl?: string,
-  trafficCurve?: { currentTarget: number }
+  trafficCurve?: { currentTarget: number },
+  erc20GasLimit?: bigint
 ): Promise<TesterResult> {
+  const transferGasLimit = erc20GasLimit ?? DEFAULT_TRANSFER_GAS_LIMIT;
   const walletA = new Wallet(pair.sender.privateKey, provider);
   const walletB = new Wallet(pair.receiver.privateKey, provider);
 
@@ -133,34 +164,31 @@ export async function runTester(
 
       try {
         if (immediateReceipt) {
-          // Single RPC round trip — sign locally, send raw, get receipt back
-          const signedTx = await wallet.signTransaction({
+          // Single RPC round trip — ethers handles tx construction,
+          // we provide all fields so it skips estimateGas/getFeeData calls.
+          // Don't wait for receipt — just record the hash and latency.
+          const tx = await wallet.sendTransaction({
             to: usdcAddress,
             data,
-            gasLimit: TRANSFER_GAS_LIMIT,
+            gasLimit: transferGasLimit,
             nonce,
-            chainId: providerNetwork.chainId,
-            type: feeData.maxFeePerGas ? 2 : 0,
             ...feeOverrides,
           });
 
-          const raw = await rpcSendRawTx(rpcUrl!, signedTx);
-
-          const txHash = typeof raw === "string" ? raw : raw.transactionHash;
-          const gasUsed = raw.gasUsed != null ? BigInt(raw.gasUsed) : TRANSFER_GAS_LIMIT;
-
-          if (raw.status != null && BigInt(raw.status) === 0n) {
-            throw new Error("transaction reverted on-chain");
-          }
-
           const latencyMs = Date.now() - startTime;
-          transactions.push({ txHash, latencyMs, gasUsed, direction, timestampMs: Date.now() });
+          transactions.push({
+            txHash: tx.hash,
+            latencyMs,
+            gasUsed: transferGasLimit,
+            direction,
+            timestampMs: Date.now(),
+          });
         } else {
           // Standard path: send + wait for receipt (2 RPC round trips)
           const tx = await wallet.sendTransaction({
             to: usdcAddress,
             data,
-            gasLimit: TRANSFER_GAS_LIMIT,
+            gasLimit: transferGasLimit,
             nonce,
             ...feeOverrides,
           });
@@ -221,7 +249,7 @@ export async function runTester(
         const tx = await walletB.sendTransaction({
           to: usdcAddress,
           data: dataBtoA,
-          gasLimit: TRANSFER_GAS_LIMIT,
+          gasLimit: transferGasLimit,
           nonce: nonceB,
           ...feeOverrides,
         });
